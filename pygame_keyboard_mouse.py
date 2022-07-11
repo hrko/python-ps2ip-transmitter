@@ -1,28 +1,20 @@
 #!/usr/bin/env python3
 
-# AUTHOR=EMARD
+# AUTHOR=EMARD,hrko
 # LICENSE=GPL
-
-# use ps2recv.py on ESP32 (set pinout at ps2recv.py)
-# edit "mouse_wheel" (below)
-# False: send 3-byte reports as no-wheel mouse (legacy/uninitialized PS/2)
-# True:  send 4-byte reports as wheel mouse    (modern PS/2)
-
-# apt-get install fonts-dseg
 
 import pygame
 import struct
 import socket
 
-tcp_host = "192.168.48.181"
-tcp_port = 3252
+esp32_ip = "172.21.186.100"
+esp32_port = 3252
+esp32_addr = (esp32_ip, esp32_port)
 mouse_wheel = False
+toggle_grab_key = pygame.K_INSERT
 
-ps2_tcp=socket.create_connection((tcp_host, tcp_port))
-print("Sending mouse events to %s:%s" % (tcp_host,tcp_port))
-#ps2_tcp.sendall(bytearray([0xAA, 0x00, 0xFA]))
-# mouse sends 0xAA 0x00 after being plugged
-# 0xFA is ACK what mouse sends after being configured
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+print("Sending events to udp://%s:%s" % (esp32_ip,esp32_port))
 
 def mouse_wheel_report(dx,dy,dz,btn_left,btn_middle,btn_right):
   return struct.pack("<BBBBBBBBH",
@@ -57,13 +49,13 @@ def mouse_nowheel_report(dx,dy,btn_left,btn_middle,btn_right):
 pygame.init()
 (width, height) = (320, 200)
 screen = pygame.display.set_mode((width, height))
-pygame.display.set_caption(u'Press PAUSE to quit')
+pygame.display.set_caption(f'Press {pygame.key.name(toggle_grab_key)} to toggle grab mode')
 pygame.display.flip()
 pygame.event.set_grab(True)
 pygame.mouse.set_visible(False)
 font = pygame.font.SysFont('DSEG14 Classic', height)
 
-event2ps2 = {
+key_to_scancode = {
       pygame.K_1            : 0x16,
       pygame.K_2            : 0x1E,
       pygame.K_3            : 0x26,
@@ -169,61 +161,67 @@ y=0
 while(True):
   event = pygame.event.wait()
   if event.type == pygame.KEYDOWN:
-    if event.key == pygame.K_PAUSE:
-      print("PAUSE")
-      break
-    text = str(event.unicode)
-    screen.blit(font.render(text, True, (255, 255, 255)), (0, 0))
-    pygame.display.flip()
-    if event.key in event2ps2:
-        code = event2ps2[event.key]
+    # Toggle input grab mode
+    if event.key == toggle_grab_key:
+      print(f"{pygame.key.name(toggle_grab_key)} key pressed. Toggle input grab mode.")
+      if pygame.event.get_grab() == True:
+        pygame.event.set_grab(False)
+      else:
+        pygame.event.set_grab(True)
+    # text = str(event.unicode)
+    # screen.blit(font.render(text, True, (255, 255, 255)), (0, 0))
+    # pygame.display.flip()
+    if event.key in key_to_scancode:
+        code = key_to_scancode[event.key]
         if code & 0x80:
           packet = bytearray([ord('K'), 2, 0xE0, code & 0x7F, ord('W'), 2, 0x50, 0xC3])
         else:
           packet = bytearray([ord('K'), 1, code & 0x7F, ord('W'), 2, 0x50, 0xC3])
-        ps2_tcp.sendall(packet)
+        sock.sendto(packet, esp32_addr)
+    print(f"Key pressed: {pygame.key.name(event.key)}")
     continue
   if event.type == pygame.KEYUP:
-    screen.fill((0,0,0))
-    pygame.display.flip()
-    if event.key in event2ps2:
-        code = event2ps2[event.key]
+    # screen.fill((0,0,0))
+    # pygame.display.flip()
+    if event.key in key_to_scancode:
+        code = key_to_scancode[event.key]
         if code & 0x80:
           packet = bytearray([ord('K'), 3, 0xE0, 0xF0, code & 0x7F, ord('W'), 2, 0x50, 0xC3])
         else:
           packet = bytearray([ord('K'), 2, 0xF0, code & 0x7F, ord('W'), 2, 0x50, 0xC3])
-        ps2_tcp.sendall(packet)
+        sock.sendto(packet, esp32_addr)
+    print(f"Key released: {pygame.key.name(event.key)}")
     continue
-  wheel = 0
-  if event.type == pygame.MOUSEBUTTONDOWN: # for wheel events
-    if event.button == 4: # wheel UP
-      wheel = -1
-    if event.button == 5: # wheel DOWN
-      wheel = 1
-  (dx, dy) = pygame.mouse.get_rel()
-  dz = wheel
-  (btn_left, btn_middle, btn_right) = pygame.mouse.get_pressed()
+  # wheel = 0
+  # if event.type == pygame.MOUSEBUTTONDOWN: # for wheel events
+  #   if event.button == 4: # wheel UP
+  #     wheel = -1
+  #   if event.button == 5: # wheel DOWN
+  #     wheel = 1
+  # (dx, dy) = pygame.mouse.get_rel()
+  # dz = wheel
+  # (btn_left, btn_middle, btn_right) = pygame.mouse.get_pressed()
 
-  if mouse_wheel:
-    # mouse with wheel
-    report = mouse_wheel_report(dx, dy, dz, btn_left, btn_middle, btn_right)
-    ps2_tcp.sendall(bytearray(report))
-    #print("0x%08X: X=%4d, Y=%4d, Z=%2d, L=%2d, M=%2d, R=%2d" % (struct.unpack("I",report)[0], dx, dy, dz, btn_left, btn_middle, btn_right))
-  else:
-    # mouse without wheel
-    report = mouse_nowheel_report(dx, dy, btn_left, btn_middle, btn_right)
-    ps2_tcp.sendall(bytearray(report))
-    #print(report)
-    #print("X=%4d, Y=%4d, L=%2d, M=%2d, R=%2d" % (dx, dy, btn_left, btn_middle, btn_right))
+  # if mouse_wheel:
+  #   # mouse with wheel
+  #   report = mouse_wheel_report(dx, dy, dz, btn_left, btn_middle, btn_right)
+  #   ps2_tcp.sendall(bytearray(report))
+  #   #print("0x%08X: X=%4d, Y=%4d, Z=%2d, L=%2d, M=%2d, R=%2d" % (struct.unpack("I",report)[0], dx, dy, dz, btn_left, btn_middle, btn_right))
+  # else:
+  #   # mouse without wheel
+  #   report = mouse_nowheel_report(dx, dy, btn_left, btn_middle, btn_right)
+  #   ps2_tcp.sendall(bytearray(report))
+  #   #print(report)
+  #   #print("X=%4d, Y=%4d, L=%2d, M=%2d, R=%2d" % (dx, dy, btn_left, btn_middle, btn_right))
 
-  # visual feedback for mouse
-  pygame.draw.line(screen, (0, 0, 0), (x, 0), (x, height-1))
-  pygame.draw.line(screen, (0, 0, 0), (0, y), (width-1, y))
-  x += dx
-  x %= width
-  y += dy
-  y %= height
-  pygame.draw.line(screen, (255, 255, 255), (x, 0), (x, height-1))
-  pygame.draw.line(screen, (255, 255, 255), (0, y), (width-1, y))
-  pygame.display.flip()
+  # # visual feedback for mouse
+  # pygame.draw.line(screen, (0, 0, 0), (x, 0), (x, height-1))
+  # pygame.draw.line(screen, (0, 0, 0), (0, y), (width-1, y))
+  # x += dx
+  # x %= width
+  # y += dy
+  # y %= height
+  # pygame.draw.line(screen, (255, 255, 255), (x, 0), (x, height-1))
+  # pygame.draw.line(screen, (255, 255, 255), (0, y), (width-1, y))
+  # pygame.display.flip()
   
