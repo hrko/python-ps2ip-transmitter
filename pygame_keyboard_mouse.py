@@ -139,19 +139,20 @@ def generate_and_send_keyboard_packet(key, action):
       elif action == 'break':
         packet = bytearray([ord('K'), 2, 0xF0, code])
     sock.sendto(packet, esp32_addr)
-  if key == pygame.K_PRINT:
+  elif key == pygame.K_PRINT:
     if action == 'make':
       packet = bytearray([ord('K'), 4, 0xE0, 0x12, 0xE0, 0x7C])
     elif action == 'break':
       packet = bytearray([ord('K'), 6, 0xE0, 0xF0, 0x7C, 0xE0, 0xF0, 0x12])
     sock.sendto(packet, esp32_addr)
-  if key == pygame.K_PAUSE:
+  elif key == pygame.K_PAUSE:
     if action == 'make':
       0xE1, 0x14, 0x77, 0xE1, 0xF0, 0x14, 0xE0, 0x77, 
       packet = bytearray([ord('K'), 8, 0xE1, 0x14, 0x77, 0xE1, 0xF0, 0x14, 0xE0, 0x77])
     # Pause key does not have a break code
     sock.sendto(packet, esp32_addr)
 
+# Generate a data-reporting packet of an Intellimouse with a wheel
 def generate_mouse_packet(dx,dy,dz,btn_left,btn_middle,btn_right):
   dx_overflow_bit = 0
   dy_overflow_bit = 0
@@ -169,6 +170,10 @@ def generate_mouse_packet(dx,dy,dz,btn_left,btn_middle,btn_right):
   elif dy < -255:
     dy = -255
     dy_overflow_bit = 1
+  if dz > 7:
+    dz = 7
+  elif dz < -8:
+    dz = -8
   dx_sign_bit = ((dx & 0x100) >> 8) & 1
   dy_sign_bit = ((dy & 0x100) >> 8) & 1
   return struct.pack("<BBBBBB",
@@ -183,7 +188,7 @@ def generate_mouse_packet(dx,dy,dz,btn_left,btn_middle,btn_right):
     ( dy_overflow_bit << 7),
     dx & 0xFF, 
     dy & 0xFF, 
-    dz & 0x0F
+    dz & 0xFF
     )
 
 pygame.init()
@@ -206,6 +211,7 @@ key_pressed_list = []
 # mouse counter
 mouse_counter_x=0
 mouse_counter_y=0
+mouse_counter_z=0
 # mouse button state
 btn_left = 0
 btn_middle = 0
@@ -224,6 +230,20 @@ def update_screen():
   pygame.draw.line(screen, (255, 255, 255), (line_pos_x, 0), (line_pos_x, height-1))
   pygame.draw.line(screen, (255, 255, 255), (0, line_pos_y), (width-1, line_pos_y))
   pygame.display.flip()
+
+def mouse_report():
+  global last_time_reported_ms
+  global mouse_counter_x
+  global mouse_counter_y
+  global mouse_counter_z
+  now_ms = int(round(time.time() * 1000))
+  if now_ms - last_time_reported_ms > report_interval_ms:
+    packet = generate_mouse_packet(mouse_counter_x, mouse_counter_y, mouse_counter_z, btn_left, btn_middle, btn_right)
+    sock.sendto(packet, esp32_addr)
+    mouse_counter_x = 0
+    mouse_counter_y = 0
+    mouse_counter_z = 0
+    last_time_reported_ms = now_ms
 
 while(True):
   event = pygame.event.wait()
@@ -261,11 +281,10 @@ while(True):
     if event.button == 3:
       btn_right = 1
     if event.button == 4: # wheel UP
-      dz = 1
+      mouse_counter_z += -1
     if event.button == 5: # wheel DOWN
-      dz = -1
-    packet = generate_mouse_packet(0, 0, dz, btn_left, btn_middle, btn_right)
-    sock.sendto(packet, esp32_addr)
+      mouse_counter_z += 1
+    mouse_report()
     update_screen()
     continue
 
@@ -287,13 +306,7 @@ while(True):
     dy = -dy * mouse_speed_factor
     mouse_counter_x = int(mouse_counter_x + dx)
     mouse_counter_y = int(mouse_counter_y + dy)
-    now_ms = int(round(time.time() * 1000))
-    if now_ms - last_time_reported_ms > report_interval_ms:
-      packet = generate_mouse_packet(mouse_counter_x, mouse_counter_y, 0, btn_left, btn_middle, btn_right)
-      sock.sendto(packet, esp32_addr)
-      mouse_counter_x = 0
-      mouse_counter_y = 0
-      last_time_reported_ms = now_ms
+    mouse_report()
     if pygame.mouse.get_visible():
       line_pos_x, line_pos_y = event.pos
     else:
